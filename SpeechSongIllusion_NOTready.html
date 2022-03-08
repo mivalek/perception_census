@@ -1,0 +1,279 @@
+﻿<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Speech-to-song Illusion</title>
+  <script src="jspsych/jspsych.js"></script>
+  <script src="jspsych/plugin-fullscreen.js"></script>
+  <script src="jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="jspsych/plugin-html-button-response.js"></script>
+  <script src="jspsych/plugin-preload.js"></script>
+  <script src="jspsych/plugin-browser-check.js"></script>
+  <script src="jspsych/plugin-audio-keyboard-response.js"></script>
+  <script src="jspsych/plugin-html-slider-response.js"></script>
+  <script src="jspsych/plugin-instructions.js"></script>
+  <script src="jspsych/jspsych-psychophysics.js"></script>
+  <link rel="stylesheet" href="jspsych/jspsych.css" />
+  <link rel="stylesheet" href="experiment_style_black.css" />
+  <script src="Stimuli/SpeechToSongStimuli/stimuli.js" type="text/javascript"></script>
+</head>
+
+<body>
+  <style>
+  </style>
+  <div id="experiment-container"></div>
+  <div id="fullscreen-prompt">
+    <p>Please return to full screen to resume the experiment.</p><button id="jspsych-fullscreen-btn" class="jspsych-btn"
+      onclick="requestFullScreen()">Go full screen</button>
+  </div>
+</body>
+<script>
+  // Task description
+  /* The speech-to-song illusion refers to the experience that (sometimes) when a phrase is repeated many times, it starts sounding like song. 
+     In this task participants are presented with a spoken phrase and asked to report how musical the phrase sounds on a scale from 1 to 10,
+     where 1 corresponds to "completely speech-like", and 10 corresponds to "completely song-like". Let's start with a time limit of 5s for responding.
+
+     We will use 4 stimuli. Three of the stimuli consist of a spoken phrase. Each will be repeated 8 times one after the other 
+     (i.e. phrase 1 is repeated 8 times, then phrase 2 is presented 8 times, etc).
+     Participants will be asked to rate how musical the presented phrase sounds on each repetition. 
+     The fourth stimulus is a catch-stimulus. In repetitions 1-4 a spoken phrase is presented, while in repetitions 5-8 a sung phrase is presented. 
+
+     The stimuli are located in Stimuli/SpeehcToSongStimuli.
+
+     !!NOTE: we want this task to be accessible to people with vision deficiencies meaning all written/visual  elements should be compatible with screen readers.
+
+     References:
+     Tierney, A., Patel, A., Jasmin, K., & Breen, M. (2021). Individual differences in perception of the speech-to-song illusion are linked to musical aptitude but not musical experience.
+   */
+
+
+  // TODO
+  /*
+  - should presenttation order be randomised?
+  - should the catch trials always be last and in the same order?
+  - currently, the stimuli are shuffled and the 2 catch trials are at the very end
+  */
+  const timeline = [];
+
+  const pathToStimuli = "Stimuli/SpeechToSongStimuli/";
+  const taskQuestionTimeLimit = 5000;
+  const confidenceQuestionTimeLimit = 5000;
+  const ITI = 500;
+  // repetition counter
+  let rep = 0
+
+  // initialize jsPsych
+  // NB: remove data display from final version! */
+  const jsPsych = initJsPsych({
+    display_element: "experiment-container",
+    default_iti: ITI,
+    use_webaudio: false,
+    on_finish: function () {
+      jsPsych.data.displayData();
+    },
+    // pause experiment when window loses focus or leaves full screen mode
+    on_interaction_data_update: function (data) {
+      if (data.trial !== 0) {
+        switch (data.event) {
+          case 'blur':
+            jsPsych.pauseExperiment()
+            break;
+          case 'fullscreenexit':
+            document.body.classList.add("paused")
+            jsPsych.pauseExperiment()
+            break;
+          case 'fullscreenenter':
+            document.body.classList.remove("paused")
+            jsPsych.resumeExperiment()
+            break;
+          case 'focus':
+            if (fullScreen) jsPsych.resumeExperiment()
+            break;
+        }
+      }
+    }
+  });
+
+  // shuffle audio files
+  // easier here than later on
+  const nonCatchStimuli = jsPsych.randomization.shuffle(audio_files.filter(e => !e.match(/[cC]atch/)));
+  const catchSpeechStimuli = audio_files.filter(e => e.match(/[cC]atch.*?speech/));
+  const catchSongStimuli = audio_files.filter(e => e.match(/[cC]atch.*?song/));
+  let catchStimuli = []
+  for (let i = 0; i < catchSpeechStimuli.length; i++) {
+    catchStimuli.push(catchSpeechStimuli[i])
+    catchStimuli.push(catchSongStimuli[i])
+  }
+  const shuffledAudioFiles = nonCatchStimuli.concat(catchStimuli);
+
+  // create array of {stimulus: ..., not_in_tune: ...,} objects with audio file paths
+  const test_stimuli = shuffledAudioFiles.map(function (e, i) {
+    return {
+      stimulus: pathToStimuli + e,
+      catch: e.includes("Catch"),
+      reps: e.includes("Catch") ? 4 : 8
+    }
+  });
+
+  const enter_fullscreen = {
+    type: jsPsychFullscreen,
+    fullscreen_mode: true
+  };
+  timeline.push(enter_fullscreen);
+
+  const setup_info = {
+    type: jsPsychBrowserCheck,
+    on_finish: function (data) {
+      refresh_rate = (data.vsync_rate),
+        frame_duration = (1 / refresh_rate) * 1000
+    }
+  };
+  timeline.push(setup_info);
+
+
+  // Measure monitor size to scale stimuli using the resize plugin - skip as this is purely auditory
+
+  // welcome message
+  const welcome_message = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: '<p>Welcome message</p><p>Press any key to begin</p>',
+    choices: "ALL_KEYS",
+    response_ends_trial: true
+  };
+  timeline.push(welcome_message);
+
+
+  // Preload stimuli: The stimuli are located in Stimuli/TonalityAlignmentStimuli. Fastest way to load them might be by saving the filenames in json format (include directory, Stimuli/TonalityAlignmentStimuli) in a separate js file
+  const preload = {
+    type: jsPsychPreload,
+    audio: shuffledAudioFiles.map(e => pathToStimuli + e),
+  };
+  timeline.push(preload);
+
+
+  // Adjust volume
+  const adjust_volume = {
+    type: jsPsychAudioKeyboardResponse,
+    stimulus: 'Stimuli/VolumeAdjustmentStim.mp3',
+    prompt: 'Adjust the volume to a comfortable level and press Space to continue. After that, instructions will shortly be played through the headphones. Please concentrate on the voice and follow the instructions given. Note, there may be a short delay before the recording starts</p>',
+    choices: " ",
+    response_ends_trial: true
+  };
+  timeline.push(adjust_volume);
+
+
+
+  // Task instructions
+  const TaskInstructions = {
+    type: jsPsychInstructions,
+    pages: [
+      `<p>In this test you will hear a series of phrases.<br>Your task will be to rate how much the phrase sounds like speech or song, on a scale from one to ten.</p>`,
+      `<p>Each phrase will be repeated eight times.<br>You will rate the phrase after each repetition.<br>You will have ${taskQuestionTimeLimit / 1000} seconds to respond after each repetition</p>`,
+      `<p>If you don\'t respond within ${taskQuestionTimeLimit / 1000} seconds, the next repetition will begin.</p>`
+    ],
+    show_clickable_nav: true
+  };
+
+  timeline.push(TaskInstructions);
+
+
+  // Play stimulus
+  // Stimuli 1,5,and 42 should each be repeated 8 times.
+  // Stimuli Catch_trial_1_speech and Catch_trial_1_song are used to build the catch stimulus - 
+  //         Catch_trial_1_speech should be repeated 4 times followed by Catch_trial_1_song repeated 4 times again. 
+
+  // Play stimulus
+  const present_stimulus = {
+    type: jsPsychAudioKeyboardResponse,
+    stimulus: jsPsych.timelineVariable('stimulus'),
+    choices: "NO_KEYS",
+    response_ends_trial: false,
+    trial_ends_after_audio: true,
+    data: {
+      is_catch: jsPsych.timelineVariable('catch'),
+      is_trial: false
+    }
+  }
+
+
+  // Musicality question: Rate how musical the phrase sounds on a scale from 1 ("completely speech-like") to 10 ("completely song-like").
+  const task_prompt = {
+    type: jsPsychHtmlSliderResponse,
+    stimulus: '<p>How musical did the phrase sound?</p>',
+    lables: ['Completely speech-like', 'Completely song-like'],
+    min: 0, // 1-10 is problematic as it doesn't have a mid-point
+    max: 10,
+    slider_start: 5,
+    trial_duration: taskQuestionTimeLimit,
+    on_finish: (data) => {
+      // get the data from the previous ACTUAL trial (not stimulus presentation)
+      const prevData = jsPsych.data.get().last(3).values()[0];
+      console.log(prevData.stimulus);
+      console.log(data.stimulus);
+
+      console.log(prevData.stimulus === data.stimulus);
+      prevData.stimulus === data.stimulus ? rep++ : rep = 1;
+      data.rep = rep;
+      data.trail_no = test_stimuli.findIndex(e => e.stimulus == data.stimulus) + 1
+    },
+    data: {
+      stimulus: jsPsych.timelineVariable('stimulus'),
+      is_catch: jsPsych.timelineVariable('catch'),
+      is_trial: true
+    }
+  };
+
+  // const if_node = {
+  //   timeline: [followup_question],
+  //   conditional_function: function () {
+  //     // get the data from the previous trial
+  //     const data = jsPsych.data.get().last(1).values()[0];
+  //     followupQuestionToDisplay = data.followup - 1
+  //     console.log(followupQuestionToDisplay);
+  //     return data.followup !== 0
+  //   }
+  // }
+  const trial_procedure = {
+    timeline: [present_stimulus, task_prompt],
+    timeline_variables: test_stimuli,
+    sample: {
+      type: 'custom',
+      fn: function (t) {
+        console.log(jsPsych.timelineVariable('reps'));
+        return t.map(e => Array(test_stimuli[e].reps).fill(e))
+          .flat()
+      }
+    }
+  }
+
+  timeline.push(trial_procedure);
+
+  // Debrief
+  const DebriefMessage = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: '<p>All done!</p><p>Press any key to end</p>',
+    choices: "ALL_KEYS",
+    response_ends_trial: true
+  };
+  timeline.push(DebriefMessage);
+
+  // Run the experiment
+  jsPsych.run(timeline);
+</script>
+
+<script type="text/javascript">
+  function requestFullScreen() {
+    const element = document.documentElement;
+    if (element.requestFullscreen) {
+      element.requestFullscreen();
+    } else if (element["mozRequestFullScreen"]) {
+      element["mozRequestFullScreen"]();
+    } else if (element["webkitRequestFullscreen"]) {
+      element["webkitRequestFullscreen"]();
+    } else if (element["msRequestFullscreen"]) {
+      element["msRequestFullscreen"]();
+    }
+  }
+</script>
+
+</html>

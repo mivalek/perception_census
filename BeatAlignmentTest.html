@@ -1,0 +1,290 @@
+﻿<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Beat alignment test</title>
+  <script src="jspsych/jspsych.js"></script>
+  <script src="jspsych/plugin-fullscreen.js"></script>
+  <script src="jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="jspsych/plugin-html-button-response.js"></script>
+  <script src="jspsych/plugin-preload.js"></script>
+  <script src="jspsych/plugin-browser-check.js"></script>
+  <script src="jspsych/plugin-audio-keyboard-response.js"></script>
+  <script src="jspsych/plugin-html-slider-response.js"></script>
+  <script src="jspsych/plugin-instructions.js"></script>
+  <script src="jspsych/jspsych-psychophysics.js"></script>
+  <link rel="stylesheet" href="jspsych/jspsych.css" />
+  <link rel="stylesheet" href="experiment_style_black.css" />
+  <script src="Stimuli/BeatAlignmentStimuli/stimuli.js" type="text/javascript"></script>
+</head>
+
+<body>
+  <style>
+  </style>
+  <div id="experiment-container"></div>
+  <div id="fullscreen-prompt">
+    <p>Please return to full screen to resume the experiment.</p><button id="jspsych-fullscreen-btn" class="jspsych-btn"
+      onclick="requestFullScreen()">Go full screen</button>
+  </div>
+</body>
+<script>
+  // Task description
+
+  /* This beat perception test uses 22 stimuli drawn from Iversen & Patel (2008). These are
+    instrumental musical excerpts from a broad variety of musical genres, including rock, classical, and
+    jazz, onto which a sequence of 1 KHz 100 ms pure tones was superimposed. These tones are either
+    aligned with the beat or shifted away by 25% of the inter-beat-interval. 
+    
+    After the stimulus, participants are first asked to indicate whether the pure tones are aligned 
+    with the beat or shifted away from the beat  (by pressing buttons marked “on the beat” or “off the beat”). To start with, let's set the time limit on this question to 5s.
+    
+    After this, on a number of trials, participants are asked to make some subjective judgements, e.g. how confident they were their response was correct on
+    a scale from 50 (random guess) to 100 (complete confidence). To start with, let's set the time limit on this question to 5s.
+    The next trial should start after some reasonable ISI, e.g. 0.5s.
+
+    The stimuli are located in Stimuli/BeatAlignmentStimuli.
+
+    !!NOTE: we want this task to be accessible to people with vision deficiencies meaning all written/visual  elements should be compatible with screen readers.
+
+    References:
+    Iversen, J. R, & Patel, A. D. (2008). The Beat Alignment Test (BAT): Surveying beat processing abilities
+    in the general population. In K. Miyazaki, M. Adachi, Y Hiraga, Y Nakajima, & M. Tsuzaki (Eds.),
+    Proceedings of the 10th International Conference on Music Perception & Cognition (ICMPC10) (CD-
+    ROM; pp. 465–468). Adelaide, Australia: Causal Productions.
+
+    Tierney, A., Patel, A., Jasmin, K., & Breen, M. (2021). Individual differences in perception of the speech-to-song 
+    illusion are linked to musical aptitude but not musical experience.
+   */
+
+  const timeline = [];
+
+  const pathToStimuli = "Stimuli/BeatAlignmentStimuli/";
+  const taskQuestionTimeLimit = 5000;
+  const followupQuestionTimeLimit = 5000;
+  const ITI = 500;
+  let followupQuestionToDisplay;
+
+  const followupQs = [{
+      question: "How confident are you that your response was correct?",
+      sliderRange: [50, 100],
+      sliderStart: 75,
+      anchors: ["Not at all", "Completely"],
+      repeats: 2,
+    },
+    {
+      question: "How easy did you find this trial?",
+      sliderRange: [0, 10],
+      sliderStart: 5,
+      anchors: ["Very easy", "Very difficult"],
+      repeats: 2,
+    },
+    {
+      question: "How much attention did you pay to the stimulus?",
+      sliderRange: [0, 10],
+      sliderStart: 5,
+      anchors: ["None at all", "Complete attention"],
+      repeats: 2,
+    },
+    {
+      question: "How loud was the stimulus?",
+      sliderRange: [0, 10],
+      sliderStart: 5,
+      anchors: ["Too quiet", "Too loud"],
+      repeats: 2,
+    },
+  ]
+
+
+  let followupSchedule = followupQs.map((e, i) => Array(e.repeats).fill(i + 1)).flat()
+  while (followupSchedule.length < audio_files.length) {
+    followupSchedule.push(0)
+  }
+
+  // initialize jsPsych
+  // NB: remove data display from final version! */
+  const jsPsych = initJsPsych({
+    display_element: "experiment-container",
+    default_iti: ITI,
+    use_webaudio: false,
+    on_finish: function () {
+      jsPsych.data.displayData();
+    },
+    // pause experiment when window loses focus or leaves full screen mode
+    on_interaction_data_update: function (data) {
+      if (data.trial !== 0) {
+        switch (data.event) {
+          case 'blur':
+            jsPsych.pauseExperiment()
+            break;
+          case 'fullscreenexit':
+            document.body.classList.add("paused")
+            jsPsych.pauseExperiment()
+            break;
+          case 'fullscreenenter':
+            document.body.classList.remove("paused")
+            jsPsych.resumeExperiment()
+            break;
+          case 'focus':
+            if (fullScreen) jsPsych.resumeExperiment()
+            break;
+        }
+      }
+    }
+  });
+
+
+  // randomise when follow-up questions appear
+  followupSchedule = jsPsych.randomization.shuffle(followupSchedule)
+
+  // create array of {stimulus: ..., off_beat: ..., followup: ...} objects with audio file paths
+  const test_stimuli = audio_files.map(function (e, i) {
+    return {
+      stimulus: pathToStimuli + e,
+      off_beat: e.includes("off"),
+      followup: followupSchedule[i]
+    }
+  });
+
+  const enter_fullscreen = {
+    type: jsPsychFullscreen,
+    fullscreen_mode: true
+  };
+  timeline.push(enter_fullscreen);
+
+  const setup_info = {
+    type: jsPsychBrowserCheck,
+    on_finish: function (data) {
+      refresh_rate = (data.vsync_rate),
+        frame_duration = (1 / refresh_rate) * 1000
+    }
+  };
+  timeline.push(setup_info);
+
+
+  // Measure monitor size to scale stimuli using the resize plugin - skip as this is purely auditory
+
+
+  // welcome message
+  const welcome_message = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: '<p>Welcome message</p><p>Press any key to begin</p>',
+    choices: "ALL_KEYS",
+    response_ends_trial: true
+  };
+  timeline.push(welcome_message);
+
+
+  // Preload stimuli: The stimuli are located in Stimuli/TonalityAlignmentStimuli. Fastest way to load them might be by saving the filenames in json format (include directory, Stimuli/TonalityAlignmentStimuli) in a separate js file
+  const preload = {
+    type: jsPsychPreload,
+    audio: audio_files.map(e => pathToStimuli + e),
+  };
+  timeline.push(preload);
+
+  // Adjust volume
+  const adjust_volume = {
+    type: jsPsychAudioKeyboardResponse,
+    stimulus: 'Stimuli/VolumeAdjustmentStim.mp3',
+    prompt: 'Adjust the volume to a comfortable level and press Space to continue. After that, instructions will shortly be played through the headphones. Please concentrate on the voice and follow the instructions given. Note, there may be a short delay before the recording starts</p>',
+    choices: " ",
+    response_ends_trial: true
+  };
+  timeline.push(adjust_volume);
+
+
+
+  // Task instructions
+  const TaskInstructions = {
+    type: jsPsychInstructions,
+    pages: ['<p>Instruction</p>'],
+    show_clickable_nav: true
+  };
+
+  timeline.push(TaskInstructions);
+
+  // Play stimulus
+  const present_stimulus = {
+    type: jsPsychAudioKeyboardResponse,
+    stimulus: jsPsych.timelineVariable('stimulus'),
+    choices: "NO_KEYS",
+    response_ends_trial: false,
+    trial_ends_after_audio: true,
+    data: {
+      off_beat: jsPsych.timelineVariable('off_beat')
+    }
+  }
+
+  // Task prompt
+  const task_prompt = {
+    type: jsPsychHtmlButtonResponse,
+    stimulus: '<p>Were the beeps on-beat or off-beat?</p>',
+    choices: ['On beat', 'Off beat'],
+    trial_duration: taskQuestionTimeLimit,
+    on_finish: function (data) {
+      // Score the response as correct or incorrect.
+      data.correct = data.response == data.off_beat
+    },
+    data: {
+      stimulus: jsPsych.timelineVariable('stimulus'),
+      off_beat: jsPsych.timelineVariable('off_beat'),
+      followup: jsPsych.timelineVariable('followup'),
+    }
+  };
+
+  const followup_question = {
+    type: jsPsychHtmlSliderResponse,
+    stimulus: () => followupQs[followupQuestionToDisplay].question,
+    labels: () => followupQs[followupQuestionToDisplay].anchors,
+    min: () => followupQs[followupQuestionToDisplay].sliderRange[0],
+    max: () => followupQs[followupQuestionToDisplay].sliderRange[1],
+    slider_start: () => followupQs[followupQuestionToDisplay].sliderStart,
+    trial_duration: followupQuestionTimeLimit,
+  }
+
+  const if_node = {
+    timeline: [followup_question],
+    conditional_function: function () {
+      // get the data from the previous trial
+      const data = jsPsych.data.get().last(1).values()[0];
+      followupQuestionToDisplay = data.followup - 1
+      console.log(followupQuestionToDisplay);
+      return data.followup !== 0
+    }
+  }
+  const trial_procedure = {
+    timeline: [present_stimulus, task_prompt, if_node],
+    timeline_variables: test_stimuli,
+    randomize_order: true,
+  }
+
+  timeline.push(trial_procedure);
+
+  // Debrief
+  const DebriefMessage = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: '<p>All done!</p><p>Press any key to end</p>',
+    choices: "ALL_KEYS",
+    response_ends_trial: true,
+  };
+  timeline.push(DebriefMessage);
+
+  // Run the experiment
+  jsPsych.run(timeline);
+</script>
+
+<script type="text/javascript">
+  function requestFullScreen() {
+    const element = document.documentElement;
+    if (element.requestFullscreen) {
+      element.requestFullscreen();
+    } else if (element["mozRequestFullScreen"]) {
+      element["mozRequestFullScreen"]();
+    } else if (element["webkitRequestFullscreen"]) {
+      element["webkitRequestFullscreen"]();
+    } else if (element["msRequestFullscreen"]) {
+      element["msRequestFullscreen"]();
+    }
+  }
+</script>
+
+</html>
