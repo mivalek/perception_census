@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Adaptive visual acuity test</title>
+  <script src="jspsych/jspsych.js" type="text/javascript"></script>
+  <script src="jspsych/plugin-fullscreen.js" type="text/javascript"></script>
+  <script src="jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="jspsych/plugin-browser-check.js"></script>
+  <script src="jspsych/plugin-html-keyboard-response.js"></script>
+  <script src="jspsych/plugin-instructions.js"></script>
+  <script src="jspsych/jspsych-psychophysics-3.1.0/jspsych-psychophysics.js" type="text/javascript"></script>
+  <link href="jspsych/jspsych.css" rel="stylesheet" type="text/css" />
+  <link rel="stylesheet" href="experiment_style_black.css" />
+
+<body>
+  <style>
+    #stimulus-container {
+      display: flex;
+      flex-direction: column;
+      margin: auto;
+      height: 100%;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .vertical-line {
+      height: 20vh;
+      width: 2px;
+      background: white;
+      margin-bottom: 5px;
+    }
+  </style>
+  <div id="experiment-container">
+  </div>
+  <div id="fullscreen-prompt">
+    <p>Please return to full screen to resume the experiment.</p><button id="jspsych-fullscreen-btn" class="jspsych-btn"
+      onclick="requestFullScreen()">Go full screen</button>
+  </div>
+</body>
+<script>
+  // Task description
+  /*
+  On each trial, participants see two vertical lines presented on top of each other.
+  The top line is either a to the left or to the right of the bottom line.
+  The task is to report whether the top line appears to the left or to the right of the bottom line.
+
+  If the response is correct, the distance between the lines on the next trial decreases.
+  If the response is not correct, the distance increases.
+
+  You can try a demo of the task here: https://michaelbach.de/fract/index.html (last task on the first row)
+
+  (1) the starting displacement b/n the lines is 1cm (we can assume participants will sit ~60cm away from the screen);
+
+  (2) after a correct response, the new displacement is 0.25 x the displacement on the previous trial;
+
+  (3) after an incorrect response, the new displacement is 2 x the displacement on the previous trial.
+   */
+
+  const timeline = [];
+
+  const taskQuestionTimeLimit = 5000;
+  const ITI = 500;
+
+  function getRandomDirection() {
+    return Math.random() > .5 ? "left" : "right"
+  }
+
+  // initialize jsPsych
+  // NB: remove data display from final version! */
+  const jsPsych = initJsPsych({
+    display_element: "experiment-container",
+    default_iti: ITI,
+    use_webaudio: false,
+    on_finish: function () {
+      jsPsych.data.displayData();
+    },
+    // pause experiment when window loses focus or leaves full screen mode
+    on_interaction_data_update: function (data) {
+      if (data.trial !== 0) {
+        switch (data.event) {
+          case 'blur':
+            jsPsych.pauseExperiment()
+            break;
+          case 'fullscreenexit':
+            document.body.classList.add("paused")
+            jsPsych.pauseExperiment()
+            break;
+          case 'fullscreenenter':
+            document.body.classList.remove("paused")
+            jsPsych.resumeExperiment()
+            break;
+          case 'focus':
+            if (fullScreen) jsPsych.resumeExperiment()
+            break;
+        }
+      }
+    }
+  });
+
+
+  const enter_fullscreen = {
+    type: jsPsychFullscreen,
+    fullscreen_mode: true
+  };
+  timeline.push(enter_fullscreen);
+
+  const setup_info = {
+    type: jsPsychBrowserCheck,
+    on_finish: function (data) {
+      refresh_rate = (data.vsync_rate),
+        frame_duration = (1 / refresh_rate) * 1000
+    }
+  };
+  timeline.push(setup_info);
+
+
+  // Measure monitor size to scale stimuli using the resize plugin - skip as this is purely auditory
+
+
+  // welcome message
+  const welcome_message = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: '<p>Welcome message</p><p>Press any key to begin</p>',
+    choices: "ALL_KEYS",
+    response_ends_trial: true
+  };
+  timeline.push(welcome_message);
+
+
+  // Task instructions
+  const TaskInstructions = {
+    type: jsPsychInstructions,
+    pages: ['<p>Instruction</p>'],
+    show_clickable_nav: true
+  };
+
+  timeline.push(TaskInstructions);
+
+  let trialProperties = {
+    direction: getRandomDirection(),
+    distance: 1, // start with 1cm
+  };
+
+  // trial
+  const present_stimulus = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: "",
+    choices: ['ArrowLeft', 'ArrowRight'],
+    on_start: function (trial) {
+      const directionNum = trialProperties.direction == "right" ? 1 : -1;
+      const translate = trialProperties.distance * directionNum
+      // stimulus container gets nudged horizontally within +/- 10cm from centre of screen
+      trial.stimulus = `<div id="stimulus-container" style="transform:translateX(${~~(Math.random() * 1000) / 100}cm);">
+  <div id="top" class="vertical-line" style="transform:translateX(${translate}cm);"></div>
+  <div id="bottom" class="vertical-line"></div>
+</div>`;
+    },
+    on_finish: function (data) {
+      // Score the response as correct or incorrect.
+      data.direction = trialProperties.direction;
+      data.distance = trialProperties.distance
+      const cor = data.response ? data.response.toLowerCase().includes(data.direction) : false;
+      data.correct = cor
+      trialProperties = {
+        direction: getRandomDirection(),
+        distance: cor ? data.distance / 4 : data.distance * 2,
+      }
+    },
+    response_ends_trial: true,
+    trial_duration: taskQuestionTimeLimit,
+  }
+
+  const trial_procedure = {
+    timeline: [present_stimulus],
+    repetitions: 10
+  }
+
+  timeline.push(trial_procedure);
+
+
+  // Debrief
+  const DebriefMessage = {
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: '<p>All done!</p><p>Press any key to end</p>',
+    choices: "ALL_KEYS",
+    response_ends_trial: true
+  };
+  timeline.push(DebriefMessage);
+
+  // Run the experiment
+  jsPsych.run(timeline);
+</script>
+
+<script type="text/javascript">
+  function requestFullScreen() {
+    const element = document.documentElement;
+    if (element.requestFullscreen) {
+      element.requestFullscreen();
+    } else if (element["mozRequestFullScreen"]) {
+      element["mozRequestFullScreen"]();
+    } else if (element["webkitRequestFullscreen"]) {
+      element["webkitRequestFullscreen"]();
+    } else if (element["msRequestFullscreen"]) {
+      element["msRequestFullscreen"]();
+    }
+  }
+</script>
+
+</html>
