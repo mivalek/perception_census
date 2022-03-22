@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>RepresentationalMomentum</title>
+    <script src="jspsych/jspsych.js"></script>
+    <script src="jspsych/plugin-fullscreen.js"></script>
+    <script src="jspsych/plugin-html-button-response.js"></script>
+    <script src="jspsych/plugin-resize.js"></script>
+    <script src="jspsych/plugin-browser-check.js"></script>
+    <script src="jspsych/plugin-html-slider-response.js"></script>
+    <script src="jspsych/plugin-html-keyboard-response.js"></script>
+    <script src="jspsych/jspsych-psychophysics.js"></script>
+    <script src="jspsych/plugin-instructions.js"></script>
+    <link rel="stylesheet" href="jspsych/jspsych.css" />
+    <link rel="stylesheet" href="experiment_style_black.css" />
+</head>
+
+<body>
+    <style>
+        #experiment-container {
+            overflow-y: clip;
+        }
+
+        .jspsych-content-wrapper {
+            height: 100%;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .jspsych-content {
+            margin: 0;
+            height: max-content;
+        }
+
+        #stimulus-container {
+            display: flex;
+            flex-direction: column;
+            margin: auto;
+            height: 100%;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
+    <div id="experiment-container">
+    </div>
+    <div id="fullscreen-prompt">
+        <p>Please return to full screen to resume the experiment.</p><button id="jspsych-fullscreen-btn"
+            class="jspsych-btn" onclick="requestFullScreen()">Go full screen</button>
+    </div>
+</body>
+<script>
+    // Representational momentum: Task description
+    /* DONE
+    - support for N blocks with j items, where j >= number of follow-up question (times repetitions of each one)
+    - dimensions of canvas set in cm, currently 30x15
+    - blue circle appears 1/4 of the way across canvas from the left
+    - trial ends 500ms after circle disappears
+    - task prompt appears under line
+    - overflow hidden so that scrollbars don't appear
+    - follow-up (subjective rating) questions appear randomly (randomised in each block separately)
+    */
+
+    /* TO DO
+    - where stimulus disappears/how far it moves    
+    */
+
+
+    /* On each trial, you see a circle that moves linearly from left to right across the screen. 
+       When the circle disappears, you are shown a horizontal line and you have to click on the location on the line where you last saw the circle. 
+       The location at which the circle disappears is drawn from a normal distribution with a given mean and standard deviation. 
+       Each participant will complete two "blocks". Across the two blocks, the location of disappearances will be drawn from distributions with different means but the same standard deviation. (at least this is the plan for now)
+       Currently, all of this kind of works. 
+
+       For this task I am using the jspsych-psychophysics plugin: https://jspsychophysics.hes.kyushu-u.ac.jp/pluginParams/.
+       I am mainly having trouble defining size of the screen and the locations of things relative to the size/centre of the screen. 
+       The main thing that we want to achieve is that the locations where the circle appears and disappears, as well as the speed at which it moves is pretty much the same irrespective of the monitor that people use. And this is currently causing me
+       a bit of a headache.
+       You will notice that the background colour of the monitor differs slightly from the background colour of the screen on which stimuli are drawn - I have kept it like this for now so that I can just see the screen relative to the monitor. 
+       
+       If you could also add the subjective rating questions from the beat/tonality allignment tasks that would be great. Your way was much neater than mine.
+       Ideally, we would like the questions to be evenly spread across the two blocks, and creating two "followup schedule" might be easiest. 
+    
+     */
+
+    //--------------- SETUP ---------------//
+    const taskQuestionTimeLimit = 5000;
+    const followupQuestionTimeLimit = 5000;
+    const ITI = 0; // inter-trial interval
+    const pixelsPerCm = 43;
+    const canvasWidthInCm = 30;
+    const canvasHeightInCm = 15;
+    const nBlocks = 2;
+    const trialsPerBlock = 30; // NB change!
+    const stimulusShowAtFrame = 60;
+    const stimulusMoveAtFrame = 80;
+    const speed = 5; //  speed of motion in number of pixels per frame;
+    let scalingFactor,
+        frameRate, // frames per second
+        stimulusStartX, // where does stimulus start
+        stimulusFinishX, // where does stimulus stop
+        trialFrameCount, // how many frames does trial last
+        followupQuestionToDisplay;
+    let blockCounter = 0;
+
+    const blockTimelineVar = []
+    for (let i = 0; i < nBlocks; i++) {
+        blockTimelineVar.push({
+            block_number: i + 1
+        })
+    }
+
+    const followupQs = [{
+            question: "How confident are you that your response was correct?",
+            sliderRange: [50, 100],
+            sliderStart: 75,
+            anchors: ["Not at all", "Completely"],
+            repeats: 2,
+        },
+        {
+            question: "How easy did you find this trial?",
+            sliderRange: [0, 10],
+            sliderStart: 5,
+            anchors: ["Very easy", "Very difficult"],
+            repeats: 2,
+        },
+        {
+            question: "How much attention did you pay to the stimulus?",
+            sliderRange: [0, 10],
+            sliderStart: 5,
+            anchors: ["None at all", "Complete attention"],
+            repeats: 2,
+        },
+        {
+            question: "How loud was the stimulus?", // this one needs changed
+            sliderRange: [0, 10],
+            sliderStart: 5,
+            anchors: ["Too quiet", "Too loud"],
+            repeats: 2,
+        },
+    ]
+
+    // get array of followup Q indices
+    let followupIndices = followupQs.map((e, i) => Array(e.repeats).fill(i)).flat()
+    // pad with undefined till length is equal to N of trials per block
+    while (followupIndices.length < trialsPerBlock) {
+        followupIndices.push(undefined)
+    }
+
+    // create empty schedule to be filled in after JSPsych get initialised
+    let followupSchedule = followupIndices.map(function () {
+        return {
+            item: []
+        }
+    })
+
+    // initialize jspsych
+    const jsPsych = initJsPsych({
+        display_element: "experiment-container",
+        default_iti: ITI,
+        on_finish: function () {
+            jsPsych.data.displayData();
+        },
+        // pause experiment when window loses focus or leaves full screen mode
+        on_interaction_data_update: function (data) {
+            if (data.trial !== 0) {
+                switch (data.event) {
+                    case 'blur':
+                        jsPsych.pauseExperiment()
+                        break;
+                    case 'fullscreenexit':
+                        document.body.classList.add("paused")
+                        jsPsych.pauseExperiment()
+                        break;
+                    case 'fullscreenenter':
+                        document.body.classList.remove("paused")
+                        jsPsych.resumeExperiment()
+                        break;
+                    case 'focus':
+                        if (fullScreen) jsPsych.resumeExperiment()
+                        break;
+                }
+            }
+        }
+    })
+
+
+
+    // fill in followup Q schedule for all blocks
+    // [{item: [b1_itemj, b2_itemj, ... bi_itemj]} , {} , ... , {}_j ]
+    for (let i = 0; i < nBlocks; i++) {
+        // randomise when follow-up questions appear in a given block
+        const blockSchedule = jsPsych.randomization.shuffle(followupIndices);
+        for (let j = 0; j < blockSchedule.length; j++) {
+            followupSchedule[j].item.push(blockSchedule[j]);
+        }
+    }
+
+    ////////// DELETE //////////
+    // only take 5 trials, instead of trialsPerBlock
+    followupSchedule = followupSchedule.slice(0, 5)
+    /////////////////////////////
+
+    // enter fullscreen
+    const enter_fullscreen = {
+        type: jsPsychFullscreen,
+        fullscreen_mode: true
+    };
+
+    // measure monitor size to scale stimuli
+    const inputs = {
+        type: jsPsychResize,
+        item_width: 8.56, //in cm
+        item_height: 5.39, //in cm
+        prompt: "<p>Click and drag the lower right corner of the box until the box is the same size as a credit card held up to the screen.</p><p>Click Continue when you are ready.</p>",
+        pixels_per_unit: pixelsPerCm,
+        on_finish: function (data) {
+            scalingFactor = data.scale_factor
+        },
+    };
+
+    // collect information about setup: monitor size, refresh rate, browser, etc. 
+    const setup_info = {
+        type: jsPsychBrowserCheck,
+        data: {
+            frame_duration: []
+        },
+        on_finish: function (data) {
+            frameRate = data.vsync_rate;
+            stimulusStartX = (canvasWidthInCm * pixelsPerCm) / 4;
+            data.frame_duration = (1 / frameRate) * 1000;
+        }
+    };
+
+
+    const instruction = {
+        type: jsPsychInstructions,
+        pages: ['<p>Instruction</p>'],
+        show_clickable_nav: true
+    }
+
+    const tested_means = jsPsych.randomization.sampleWithoutReplacement([700, 800, 900, 1000, 1100],
+        nBlocks
+    ) //the stim will disappear on the right side of the screen and ideally I would like to define the means relative to the size of the screen, e.g. 5/8*screen width, 6/8*screen width, etc
+    const tested_sd = jsPsych.randomization.sampleWithoutReplacement([50, 100, 150, 200, 250], 1)[0]
+
+
+    const block_intro = {
+        type: jsPsychHtmlKeyboardResponse,
+        stimulus: () => `<p>Block ${jsPsych.timelineVariable('block_number')}</p>`,
+        choices: "NO_KEYS",
+        response_ends_trial: true,
+        trial_duration: 2500,
+    };
+
+    // Define stimulus in Block 1
+    const circle_object = {
+        obj_type: 'circle',
+        startX: () => stimulusStartX,
+        startY: 'center', // starting location of stim on Y axis
+        endX: function () {
+            stimulusFinishX = Math.round(jsPsych.randomization.sampleNormal(tested_means[blockCounter],
+                tested_sd));
+            console.log(`mean: ${tested_means[blockCounter]}`);
+            return stimulusFinishX;
+        }, // end location of stim on the X axis, in pixels
+        endY: 'center', // end location of stim on the Y axis (same as starting location because the stimulus only moves along the X axis)
+        radius: 10,
+        fill_color: 'blue',
+        is_frame: true, // represent time in frames
+        horiz_pix_frame: speed, // speed of motion along the x axis in frames
+        vert_pix_frame: 0, // the circle does not move vertically, so speed is 0 p/f in the vertical direction
+        show_start_frame: stimulusShowAtFrame, // frame at which the stimulus is presented on the screen relative to the start of the trial
+        motion_start_frame: stimulusMoveAtFrame, // frame at which the stimulus starts moving relative to the start of the trial
+
+    }
+    // Define stimulus presentation in Block 1
+    const stimulus_presentation = {
+        type: jsPsychPsychophysics,
+        canvas_width: () => canvasWidthInCm * pixelsPerCm,
+        canvas_height: () => canvasHeightInCm * pixelsPerCm,
+        stimuli: [circle_object],
+        response_type: 'mouse',
+        response_ends_trial: false,
+        on_start: function (trial) {
+            trialFrameCount = Math.round(stimulusMoveAtFrame + (stimulusFinishX - stimulusStartX) / speed);
+            trial.stimuli[0].motion_end_frame =
+                trialFrameCount; // frame at which the stimulus stops moving
+            trial.stimuli[0].show_end_frame =
+                trialFrameCount; // stimulus disappears as soon as it stops
+            document.body.style.cursor = "none";
+            trial.trial_duration = 1000 * trialFrameCount / frameRate +
+                500 // trial ends 500ms after stimulus disappears
+            console.log({
+                start_at: stimulusStartX,
+                end_at: stimulusFinishX,
+                trial_time: 1000 * trialFrameCount / frameRate +
+                    500,
+            });
+        },
+        on_finish: function (data) {
+            data.mean_of_distribution = tested_means[0];
+            data.sd_of_distribution = tested_sd[0];
+            data.motion_end = trialFrameCount;
+            data.stim_end = trialFrameCount;
+            data.starting_location_x = stimulusStartX;
+            data.desired_final_location_x = stimulusFinishX;
+            data.actual_final_location_x = speed * (trialFrameCount - 80) + stimulusStartX;
+            data.pixels_per_frame = speed;
+        }
+    }
+
+    // Define line along which participants will provide their response
+    const response_line = {
+        obj_type: 'line',
+        startX: 0, // line horizontal  mid-point
+        startY: 'center', // line vertical  mid-point
+        line_length: 5000, // 5000px is plenty long for any screen
+        line_width: 5,
+        line_color: 'blue',
+        angle: 0,
+        show_start_time: 500,
+        show_end_time: taskQuestionTimeLimit
+    }
+
+    // Define response screen
+    const task_prompt = {
+        type: jsPsychPsychophysics,
+        canvas_width: () => canvasWidthInCm * pixelsPerCm,
+        canvas_height: () => canvasHeightInCm * pixelsPerCm,
+        stimuli: [response_line],
+        trial_duration: taskQuestionTimeLimit,
+        response_type: 'mouse',
+        prompt: '<p style="position:absolute;margin:auto;bottom:calc(40% - 2em);width: 100%;">Click on the position along the line where you last saw the circle.</p>',
+        on_start: function () {
+            document.body.style.cursor = "default"
+        },
+    }
+
+    const followup_question = {
+        type: jsPsychHtmlSliderResponse,
+        stimulus: () => followupQs[followupQuestionToDisplay].question,
+        labels: () => followupQs[followupQuestionToDisplay].anchors,
+        min: () => followupQs[followupQuestionToDisplay].sliderRange[0],
+        max: () => followupQs[followupQuestionToDisplay].sliderRange[1],
+        slider_start: () => followupQs[followupQuestionToDisplay].sliderStart,
+        trial_duration: followupQuestionTimeLimit,
+    }
+
+    const if_node = {
+        timeline: [followup_question],
+        conditional_function: function () {
+            followupQuestionToDisplay = jsPsych.timelineVariable('item')[blockCounter]
+            return typeof followupQuestionToDisplay !== 'undefined';
+        }
+    }
+    const test_procedure = {
+        timeline: [stimulus_presentation, task_prompt, if_node],
+        timeline_variables: followupSchedule,
+        on_timeline_finish: function () {
+            blockCounter++;
+        }
+    }
+
+    const block = {
+        timeline: [block_intro, test_procedure],
+        timeline_variables: blockTimelineVar
+    }
+
+    jsPsych.run([enter_fullscreen, inputs, setup_info, instruction, block])
+</script>
+
+<script type="text/javascript">
+    function requestFullScreen() {
+        const element = document.documentElement;
+        if (element.requestFullscreen) {
+            element.requestFullscreen();
+        } else if (element["mozRequestFullScreen"]) {
+            element["mozRequestFullScreen"]();
+        } else if (element["webkitRequestFullscreen"]) {
+            element["webkitRequestFullscreen"]();
+        } else if (element["msRequestFullscreen"]) {
+            element["msRequestFullscreen"]();
+        }
+    }
+</script>
+
+</html>
